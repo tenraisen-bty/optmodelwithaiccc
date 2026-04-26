@@ -57,7 +57,7 @@ Ensure you have Python 3.13 installed on your system.
     File Format: Currently, only .xlsx files are supported. New updates for other formats are coming soon.
 
 6. **UPDATES (V 1.1.0)**
-    For optimizing O() and memory usage, lasso algorithm have been used with ridge
+    For optimizing O() and memory usage, lasso algorithm have been used with ridge.
     First version of the program, testdata2 used 491.65 MB at peak. Currently, it is decreased to 5.93 MB
 
         
