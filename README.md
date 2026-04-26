@@ -56,11 +56,15 @@ Ensure you have Python 3.13 installed on your system.
     Placement: Your result/target table should be located after the $n^{th}$ column (where $n$ is your specified end column).
     File Format: Currently, only .xlsx files are supported. New updates for other formats are coming soon.
 
+6. **UPDATES (V 1.1.0)**
+    For optimizing O() and memory usage, lasso algorithm have been used with ridge
+    First version of the program, testdata2 used 491.65 MB at peak. Currently, it is decreased to 5.93 MB
+
         
 
 =======
 # optmodelwithaiccc
->>>>>>>  Memory management will be optimized. 
+>>>>>>>  
 
 
 
