@@ -4,9 +4,15 @@ import numpy as np
 import statsmodels.api as sm
 import itertools
 import functions as fn
+import tracemalloc
+from sklearn.linear_model import LassoCV
+from sklearn.preprocessing import StandardScaler
+import gc
+__version__ = "1.1.0"  # Lasso/ElasticNet Optimize Edilmiş Sürüm
+__author__ = "tenraisen-bty"
 
 def main():
-    
+    tracemalloc.start()
     # TODO: Check for command-line usage
     try:
 
@@ -25,56 +31,90 @@ def main():
         rawdatafiles = pd.read_excel(sys.argv[1])
         a = int(sys.argv[2])
         b = int(sys.argv[3] ) + 1
-        datafile = rawdatafiles.iloc[:, a:b]
+        datafile = rawdatafiles.iloc[:, a:b].astype('float32')
     
 
     #TODO: Write the datas into a array for variables
-        variabledata = datafile.iloc[:,:]
-        normalizeddata = variabledata.copy().add_prefix('n_')
+        normalizeddata = datafile.iloc[:,:].copy().add_prefix('n_')
+        del datafile
         for column in normalizeddata:
             normalizeddata[column] = fn._normalize(normalizeddata[column])
         
     
     #TODO: Write the datas into a array for results
-        resultdata = rawdatafiles.iloc[:, b:]
-        n = len(resultdata.iloc[:])   
+        resultdata = rawdatafiles.iloc[:, b:].astype('float32')
+        del rawdatafiles
 
 
     #TODO: Create New Columns that are combination of initial coulmns
-        normalizeddata = fn._combinations(normalizeddata)
-        cols = normalizeddata.columns.tolist()
-        num_preds = len(cols)
-        comps = [list(format(i, f'0{num_preds}b')) for i in range(2**num_preds)]
-        comps = np.array(comps).astype(int)
+        normalizeddata = fn._combinationsaicc(normalizeddata)
 
 
     #TODO: Calculate All The Models Possibilities
-        results = []        
-        for i in range(len(comps)):
-            current_mask = comps[i]
-            selected_cols = [cols[j] for j in range(len(cols)) if current_mask[j] == 1]
-            if not selected_cols:
-                continue
+        # --- 1. VERİ HAZIRLIĞI (Döngüye Girmeden Önce) ---
         df_x = normalizeddata.reset_index(drop=True)
         df_y = resultdata.reset_index(drop=True)
-        alldatas = pd.concat([df_x, df_y], axis=1)
-        results = fn._findbestmodel(alldatas,len(df_y.columns))
-        coefficient_list= []
+        target_count = len(df_y.columns)
+
+        # Orijinal büyük parçaları hemen silelim ki RAM'de yer açılsın
+        del normalizeddata
+        del resultdata
+
+        # Veriyi birleştir ve float32 yaparak RAM'i %50 koru
+        alldatas = pd.concat([df_x, df_y], axis=1).astype('float32')
+        
+        # Gereksiz ara kopyaları sil
+        del df_x
+        del df_y
+        gc.collect()
+
+        # --- 2. MODEL SEÇİMİ (Artık Döngüye Gerek Yok!) ---
+        # fn._findbestmodel kendi içinde her hedef için en iyi değişkenleri bulacak
+        results = fn._findbestmodel(alldatas, target_count)
+
+        # --- 3. KATSAYI TABLOSUNU OLUŞTURMA ---
+        coefficient_list = []
         for target, info in results.items():
+            if not info["best_cols"]: # Eğer hiç değişken seçilemediyse atla
+                continue
+                
             y = alldatas[target]
-            x= sm.add_constant(alldatas[info["best_cols"]])
-            model = sm.OLS(y,x).fit()
+            # Sadece seçilen kolonlarla model kur
+            x = sm.add_constant(alldatas[info["best_cols"]])
+            
+            model = sm.OLS(y, x).fit()
             coeffs = model.params.copy()
             coeffs.name = target
             coefficient_list.append(coeffs)
         
-        coefficient_table = pd.concat(coefficient_list, axis=1).fillna("-")
-        print(coefficient_table)
+        # --- 4. SONUÇLARI YAZDIR VE TEMİZLE ---
+        if coefficient_list:
+            final_table = pd.concat(coefficient_list, axis=1).fillna("-")
+            r2_row = pd.Series({t: f"{info['r2']:.4f}" for t, info in results.items()}, name="R-Squared")
+            r2_adj_row = pd.Series({t: f"{info['r2_adj']:.4f}" for t, info in results.items()}, name="Adj. R-Squared")
+            aicc_row = pd.Series({t: f"{info['min_aicc']:.2f}" for t, info in results.items()}, name="AICc")
 
+            # Tabloya ekle
+            final_table = pd.concat([final_table, pd.DataFrame([r2_row, r2_adj_row, aicc_row])])
+            print(f"Analysis Report - Version: {__version__}\nby: {__author__}")
+            print("\n--- Model Coefficients ---")
+            print(final_table)
+        else:
+            print("Uyarı: Hiçbir hedef değişken için anlamlı bir model kurulamadı.")
 
+        del alldatas
+        gc.collect()
+
+        # --- 5. HAFIZA RAPORU ---
+        current, peak = tracemalloc.get_traced_memory()
+        print(f"\nMemory Report:")
+        print(f"Current Memory Usage: {current / 10**6:.2f} MB")
+        print(f"Peak Memory Usage: {peak / 10**6:.2f} MB")  
+        
+        tracemalloc.stop()
     except Exception as generr:
+
         print(f"General Error: {generr}")  
-
-
+        
 if __name__ == "__main__":
     main()

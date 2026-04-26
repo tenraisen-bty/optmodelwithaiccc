@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # Python Data Analysis & Statistical Modeling Project
 
 This project is a Python-based data analysis tool designed to automate data extraction from Excel files, perform data cleaning, and execute statistical modeling using `statsmodels`.
@@ -56,4 +57,10 @@ Ensure you have Python 3.13 installed on your system.
     File Format: Currently, only .xlsx files are supported. New updates for other formats are coming soon.
 
         
+
+=======
+# optmodelwithaiccc
+>>>>>>>  Memory management will be optimized. 
+
+
 

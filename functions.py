@@ -2,99 +2,86 @@ import pandas as pd
 import numpy as np
 import statsmodels.api as sm
 import itertools
+from sklearn.linear_model import LassoCV
+from sklearn.preprocessing import StandardScaler
+from sklearn.linear_model import ElasticNetCV
+import gc
 
 def _normalize(series):
     """This function takes variables from each column and normalizes between -1 and 1. The correct way to use this code is in one column each row should be in same data type and represents one factor"""
     
-    max_val = series.max()
-    min_val= series.min()
+    max_val, min_val = series.max(), series.min()
     try:        
         if max_val == min_val:
-            return series -series + 0
+            return series * 0
         
     except Exception as normfunc:
         print(f"Function usage error of _normalize: {normfunc} ")
 
     else:
-        normalized = 2 * (series - min_val) / (max_val - min_val) - 1
+        normalized = (2 * (series - min_val) / (max_val - min_val) - 1).astype('float32')
         return normalized
     
     
-def _combinations(series):
+def _combinationsaicc(series):
     """This function creates new combinations from variables by multiplication"""
 
+    try:       
+        new_series = series.astype('float32').copy()
+        for col in series.columns:
+            new_series[f"{col}^2"] = (series[col] ** 2).astype('float32')
 
-    try:
-        list_column = list(series.columns)
-        new_series = series.copy()
-        for col in list_column:
-            new_series[f"{col}^2"] = series[col] ** 2
-
-        for i in range(len(list_column)):
-            for j in range(i + 1, len(list_column)):
-                c1 = list_column[i]
-                c2 = list_column[j]            
-                new_name = f"{c1}*{c2.replace('n_', '')}"
-                new_series[new_name] = series[c1] * series[c2]
-        
-        new_series = new_series.apply(lambda x: x.where(x.abs() > 1e-10, 0.0))
+        for c1,c2 in itertools.combinations(series.columns,2):          
+            new_series[f"{c1}*{c2.lstrip('n_')}"] = (series[c1] * series[c2]).astype('float32')
+               
+        new_series = new_series.mask(new_series.abs() <= 1e-10, 0.0)
         return new_series
                 
     except Exception as newcolumn:
         print(f"Error for creating new combination ( Error 0003): {newcolumn}") 
 
-
-def _findbestmodel(data,target_count):
-
-    """Calculates all variations AICCc and finds best combinations for results"""
-    n = len(data)
-    X_all = data.iloc[:,:-target_count]
-    Y_all = data.iloc[:,-target_count:]
-
-    predictor_names = X_all.columns.tolist()
-    target_names = Y_all.columns.tolist()
-    num_preds = len(predictor_names)
-    mask_matrix = np.array(list(itertools.product([0, 1], repeat=num_preds)))
+def _findbestmodel(data, target_count):
+    data = data.astype('float32')
+    predictor_names = data.iloc[:, :-target_count].columns.tolist()
+    target_names = data.iloc[:, -target_count:].columns.tolist()
     
-    # 3. Sonuçları tutmak için bir sözlük
-    # Her hedef değişken için en iyi AICc ve en iyi sütunları saklayacağız
-    best_results = {target: {"min_aicc": float('inf'), "best_cols": []} for target in target_names}
+    X = data[predictor_names]
+    # Kritik: Veriyi ölçeklendirmek ElasticNet için şarttır
+    scaler = StandardScaler()
+    X_scaled = scaler.fit_transform(X)
+    
+    best_results = {}
 
-    print(f"Started to Analyze: {num_preds} variable, {len(mask_matrix)} combination, {target_count} target.")
-
-    # 4. Genel Döngü
-    for i in range(len(mask_matrix)):
-        mask = mask_matrix[i]
-        selected_cols = [predictor_names[j] for j in range(num_preds) if mask[j] == 1]
+    for target in target_names:
+        y = data[target]
         
-        # Seçilen sütunlarla X verisini hazırla
-        if len(selected_cols) == 0:
-            X_current = pd.DataFrame(np.ones((n, 1)), columns=['intercept'])
-        else:
-            X_current = sm.add_constant(X_all[selected_cols])
-
-        # Her bir hedef değişken için modeli test et
-        for target in target_names:
-            y = Y_all[target]
+        # l1_ratio=0.7: %70 Lasso, %30 Ridge özelliği taşır. 
+        # Bu, birbiriyle ilişkili (n_E ve n_E^2 gibi) değişkenleri korur.
+        enet = ElasticNetCV(l1_ratio=0.7, cv=5, random_state=42, max_iter=10000).fit(X_scaled, y)
+        
+        # Katsayı eşiğini biraz daha hassas yapalım
+        selected_indices = [i for i, coef in enumerate(enet.coef_) if abs(coef) > 1e-5]
+        selected_cols = [predictor_names[i] for i in selected_indices]
+        
+        if not selected_cols:
+            # Eğer hala boşsa, en yüksek korelasyona sahip 2 değişkeni zorla seç
+            corrs = X.corrwith(y).abs().sort_values(ascending=False)
+            selected_cols = corrs.head(2).index.tolist()
             
-            try:
-                model = sm.OLS(y, X_current).fit()
-                k = model.df_model + 1 # Parametre sayısı
-                
-                # AICc Hesaplama
-                if n - k - 1 <= 0:
-                    aicc = float('inf')
-                else:
-                    aicc = model.aic + (2 * k * (k + 1)) / (n - k - 1)
-                
-                # Eğer bu model daha iyiyse kaydet
-                if aicc < best_results[target]["min_aicc"]:
-                    best_results[target]["min_aicc"] = aicc
-                    best_results[target]["best_cols"] = selected_cols
-                    
-            except Exception as e:
-            # Hangi sütun kombinasyonunda ne hatası aldığını görelim
-                print(f"ERROR while finding best combination: {selected_cols}, Error in _findbestmodel: {e}")
-                continue
 
+        # SEÇİLENLERLE OLS YAP (Bu kısım katsayıları ilk versiyondaki gibi gerçekçi yapar)
+        X_final = sm.add_constant(data[selected_cols])
+        final_model = sm.OLS(y, X_final).fit()
+        
+        n, k = len(data), final_model.df_model + 1
+        aicc = final_model.aic + (2*k*(k+1))/(n-k-1) if n-k-1 > 0 else float('inf')
+        best_results[target] = {
+            "min_aicc": aicc, 
+            "best_cols": selected_cols,
+            "r2": final_model.rsquared,
+            "r2_adj": final_model.rsquared_adj
+        }
+        gc.collect()
+        
+       
     return best_results
